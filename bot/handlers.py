@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -109,6 +109,40 @@ class BotHandlers:
             return f"{weekdays_label(intent.weekdays)} {format_hhmm(intent.time_of_day)}"
         return "规则缺失"
 
+    def _pending_preview_text(self, intent: ParsedReminderIntent) -> str:
+        return (
+            "🧠 AI 解析结果（请确认）\n\n"
+            f"标题：{intent.title}\n"
+            f"规则：{self._intent_rule_text(intent)}\n"
+            f"提前：{intent.pre_minutes} 分钟"
+        )
+
+    def _build_ai_confirm_keyboard(self, token: str) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("🚫 无提前", callback_data=f"ai|pre|{token}|0"),
+                    InlineKeyboardButton("⏱ 提前10分钟", callback_data=f"ai|pre|{token}|10"),
+                    InlineKeyboardButton("⏱ 提前30分钟", callback_data=f"ai|pre|{token}|30"),
+                ],
+                [
+                    InlineKeyboardButton("✅ 确认创建", callback_data=f"ai|ok|{token}"),
+                    InlineKeyboardButton("❌ 取消", callback_data=f"ai|cancel|{token}"),
+                ],
+            ]
+        )
+
+    def _build_pre_quick_keyboard(self, reminder_id: int) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("🚫 无提前", callback_data=f"rp|{reminder_id}|0"),
+                    InlineKeyboardButton("⏱ 提前10分钟", callback_data=f"rp|{reminder_id}|10"),
+                    InlineKeyboardButton("⏱ 提前30分钟", callback_data=f"rp|{reminder_id}|30"),
+                ]
+            ]
+        )
+
     def _create_from_intent(self, intent: ParsedReminderIntent) -> Reminder:
         if intent.kind == "once" and intent.once_at is not None:
             return self.repo.create_once(
@@ -162,7 +196,8 @@ class BotHandlers:
             "说明：\n"
             "- 每天 10:00 自动发送今日总览\n"
             "- 到点提醒后，30 分钟未完成会催一次\n"
-            "- 可在按钮里点“完成”或“稍后”"
+            "- 创建提醒后可点预设按钮快速改提前时间\n"
+            "- 到点消息可点“完成”或“稍后”"
         )
         await update.effective_message.reply_text(text)
 
@@ -188,21 +223,10 @@ class BotHandlers:
         token = secrets.token_urlsafe(6)
         self.pending_intents[token] = PendingIntent(intent=intent, created_at=datetime.now(self.tz))
 
-        keyboard = InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton("✅ 确认创建", callback_data=f"ai|ok|{token}"),
-                    InlineKeyboardButton("❌ 取消", callback_data=f"ai|cancel|{token}"),
-                ]
-            ]
+        await message.reply_text(
+            self._pending_preview_text(intent),
+            reply_markup=self._build_ai_confirm_keyboard(token),
         )
-        preview = (
-            "🧠 AI 解析结果（请确认）\n\n"
-            f"标题：{intent.title}\n"
-            f"规则：{self._intent_rule_text(intent)}\n"
-            f"提前：{intent.pre_minutes} 分钟"
-        )
-        await message.reply_text(preview, reply_markup=keyboard)
 
     async def add_daily(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._ensure_owner(update):
@@ -217,7 +241,9 @@ class BotHandlers:
                 raise ValueError("标题不能为空")
             reminder = self.repo.create_daily(title=title, at=at, pre_minutes=pre)
             await update.effective_message.reply_text(
-                f"✅ 已创建提醒 #{reminder.id}\n规则：每天 {format_hhmm(at)}\n提前：{pre} 分钟\n标题：{title}"
+                f"✅ 已创建提醒 #{reminder.id}\n规则：每天 {format_hhmm(at)}\n提前：{pre} 分钟\n标题：{title}\n\n"
+                "可点下面按钮快速改提前提醒。",
+                reply_markup=self._build_pre_quick_keyboard(reminder.id),
             )
         except Exception as exc:  # noqa: BLE001
             await update.effective_message.reply_text(f"❌ 新增失败：{exc}")
@@ -236,7 +262,9 @@ class BotHandlers:
                 raise ValueError("标题不能为空")
             reminder = self.repo.create_weekly(title=title, weekdays=days, at=at, pre_minutes=pre)
             await update.effective_message.reply_text(
-                f"✅ 已创建提醒 #{reminder.id}\n规则：{weekdays_label(days)} {format_hhmm(at)}\n提前：{pre} 分钟\n标题：{title}"
+                f"✅ 已创建提醒 #{reminder.id}\n规则：{weekdays_label(days)} {format_hhmm(at)}\n提前：{pre} 分钟\n标题：{title}\n\n"
+                "可点下面按钮快速改提前提醒。",
+                reply_markup=self._build_pre_quick_keyboard(reminder.id),
             )
         except Exception as exc:  # noqa: BLE001
             await update.effective_message.reply_text(f"❌ 新增失败：{exc}")
@@ -254,7 +282,9 @@ class BotHandlers:
                 raise ValueError("标题不能为空")
             reminder = self.repo.create_once(title=title, once_at=once_at, pre_minutes=pre)
             await update.effective_message.reply_text(
-                f"✅ 已创建提醒 #{reminder.id}\n规则：单次 {once_at.strftime('%Y-%m-%d %H:%M')}\n提前：{pre} 分钟\n标题：{title}"
+                f"✅ 已创建提醒 #{reminder.id}\n规则：单次 {once_at.strftime('%Y-%m-%d %H:%M')}\n提前：{pre} 分钟\n标题：{title}\n\n"
+                "可点下面按钮快速改提前提醒。",
+                reply_markup=self._build_pre_quick_keyboard(reminder.id),
             )
         except Exception as exc:  # noqa: BLE001
             await update.effective_message.reply_text(f"❌ 新增失败：{exc}")
@@ -432,12 +462,25 @@ class BotHandlers:
 
         payload = query.data.split("|")
         try:
-            if payload[0] == "ai" and len(payload) == 3:
+            if payload[0] == "ai" and len(payload) >= 3:
                 action = payload[1]
                 token = payload[2]
                 pending = self.pending_intents.get(token)
                 if pending is None:
                     await query.answer("这个确认已过期", show_alert=True)
+                    return
+                if action == "pre" and len(payload) == 4:
+                    minutes = max(0, int(payload[3]))
+                    updated = replace(pending.intent, pre_minutes=minutes)
+                    self.pending_intents[token] = PendingIntent(intent=updated, created_at=pending.created_at)
+                    await query.answer(f"已设置提前 {minutes} 分钟")
+                    try:
+                        await query.edit_message_text(
+                            self._pending_preview_text(updated),
+                            reply_markup=self._build_ai_confirm_keyboard(token),
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
                     return
                 if action == "cancel":
                     self.pending_intents.pop(token, None)
@@ -461,9 +504,22 @@ class BotHandlers:
                             f"ID：#{reminder.id}\n"
                             f"标题：{pending.intent.title}\n"
                             f"规则：{self._intent_rule_text(pending.intent)}\n"
-                            f"提前：{pending.intent.pre_minutes} 分钟"
+                            f"提前：{pending.intent.pre_minutes} 分钟",
+                            reply_markup=self._build_pre_quick_keyboard(reminder.id),
                         )
                     return
+
+            if payload[0] == "rp" and len(payload) == 3:
+                reminder_id = int(payload[1])
+                minutes = max(0, int(payload[2]))
+                updated = self.repo.update_pre_minutes(reminder_id, minutes)
+                if updated is None:
+                    await query.answer("提醒不存在", show_alert=True)
+                    return
+                await query.answer(f"已改为提前 {minutes} 分钟")
+                if query.message:
+                    await query.message.reply_text(f"✅ 提醒 #{reminder_id} 已改为提前 {minutes} 分钟")
+                return
 
             if payload[0] == "c" and len(payload) == 3:
                 reminder_id = int(payload[1])
