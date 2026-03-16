@@ -1,0 +1,1 @@
+"""TG reminder bot package."""
