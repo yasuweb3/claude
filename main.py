@@ -3,8 +3,16 @@ from __future__ import annotations
 import logging
 
 from telegram import BotCommand
-from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler
+from telegram.ext import (
+    Application,
+    ApplicationBuilder,
+    CallbackQueryHandler,
+    CommandHandler,
+    MessageHandler,
+    filters,
+)
 
+from bot.ai_parser import DeepSeekReminderParser
 from bot.config import load_config
 from bot.db import Database
 from bot.handlers import BotHandlers
@@ -24,7 +32,21 @@ def build_application() -> Application:
     db = Database(config.database_url)
     db.init_schema()
     repo = ReminderRepository(db, config.timezone)
-    handlers = BotHandlers(repo=repo, tz=config.timezone, owner_chat_id=config.chat_id)
+    ai_parser = None
+    if config.deepseek_api_key:
+        ai_parser = DeepSeekReminderParser(
+            api_key=config.deepseek_api_key,
+            base_url=config.deepseek_base_url,
+            model=config.deepseek_model,
+            tz=config.timezone,
+        )
+
+    handlers = BotHandlers(
+        repo=repo,
+        tz=config.timezone,
+        owner_chat_id=config.chat_id,
+        ai_parser=ai_parser,
+    )
 
     async def post_init(application: Application) -> None:
         scheduler = ReminderScheduler(
@@ -73,6 +95,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("edit_time", handlers.edit_time))
     app.add_handler(CommandHandler("edit_rule", handlers.edit_rule))
     app.add_handler(CommandHandler("edit_pre", handlers.edit_pre))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.natural_text))
     app.add_handler(CallbackQueryHandler(handlers.callback))
 
     return app

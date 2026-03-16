@@ -16,6 +16,9 @@ class AppConfig:
     daily_summary_hour: int
     daily_summary_minute: int
     poll_interval_seconds: int
+    deepseek_api_key: str | None
+    deepseek_base_url: str
+    deepseek_model: str
 
 
 def _parse_summary_time(value: str) -> tuple[int, int]:
@@ -38,6 +41,9 @@ def load_config() -> AppConfig:
     timezone_name = os.getenv("TIMEZONE", "Asia/Shanghai").strip()
     summary_time = os.getenv("DAILY_SUMMARY_TIME", "10:00").strip()
     poll_interval = int(os.getenv("POLL_INTERVAL_SECONDS", "15"))
+    deepseek_api_key = os.getenv("DEEPSEEK_API_KEY", "").strip() or None
+    deepseek_base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1").strip()
+    deepseek_model = os.getenv("DEEPSEEK_MODEL", "deepseek-chat").strip()
 
     if not bot_token:
         raise ValueError("缺少 TG_BOT_TOKEN")
@@ -56,4 +62,7 @@ def load_config() -> AppConfig:
         daily_summary_hour=hour,
         daily_summary_minute=minute,
         poll_interval_seconds=max(5, poll_interval),
+        deepseek_api_key=deepseek_api_key,
+        deepseek_base_url=deepseek_base_url,
+        deepseek_model=deepseek_model,
     )

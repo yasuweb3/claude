@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import logging
+import secrets
+from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
+from bot.ai_parser import DeepSeekReminderParser, ParsedReminderIntent
 from bot.models import Reminder, ReminderKind
 from bot.repository import ReminderRepository
 from bot.utils import (
@@ -20,6 +23,12 @@ from bot.utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class PendingIntent:
+    intent: ParsedReminderIntent
+    created_at: datetime
 
 
 def _extract_pre_option(args: list[str], default_pre: int = 10) -> tuple[int, list[str]]:
@@ -56,10 +65,18 @@ def describe_rule(reminder: Reminder, tz: ZoneInfo) -> str:
 
 
 class BotHandlers:
-    def __init__(self, repo: ReminderRepository, tz: ZoneInfo, owner_chat_id: int) -> None:
+    def __init__(
+        self,
+        repo: ReminderRepository,
+        tz: ZoneInfo,
+        owner_chat_id: int,
+        ai_parser: DeepSeekReminderParser | None = None,
+    ) -> None:
         self.repo = repo
         self.tz = tz
         self.owner_chat_id = owner_chat_id
+        self.ai_parser = ai_parser
+        self.pending_intents: dict[str, PendingIntent] = {}
 
     async def _ensure_owner(self, update: Update) -> bool:
         chat = update.effective_chat
@@ -72,6 +89,47 @@ class BotHandlers:
                 await update.callback_query.answer("无权限", show_alert=True)
             return False
         return True
+
+    def _cleanup_pending_intents(self) -> None:
+        now = datetime.now(self.tz)
+        expired = [
+            token
+            for token, pending in self.pending_intents.items()
+            if (now - pending.created_at) > timedelta(hours=2)
+        ]
+        for token in expired:
+            self.pending_intents.pop(token, None)
+
+    def _intent_rule_text(self, intent: ParsedReminderIntent) -> str:
+        if intent.kind == "once" and intent.once_at is not None:
+            return f"单次 {intent.once_at.strftime('%Y-%m-%d %H:%M')}"
+        if intent.kind == "daily" and intent.time_of_day is not None:
+            return f"每天 {format_hhmm(intent.time_of_day)}"
+        if intent.kind == "weekly" and intent.time_of_day is not None and intent.weekdays:
+            return f"{weekdays_label(intent.weekdays)} {format_hhmm(intent.time_of_day)}"
+        return "规则缺失"
+
+    def _create_from_intent(self, intent: ParsedReminderIntent) -> Reminder:
+        if intent.kind == "once" and intent.once_at is not None:
+            return self.repo.create_once(
+                title=intent.title,
+                once_at=intent.once_at,
+                pre_minutes=intent.pre_minutes,
+            )
+        if intent.kind == "daily" and intent.time_of_day is not None:
+            return self.repo.create_daily(
+                title=intent.title,
+                at=intent.time_of_day,
+                pre_minutes=intent.pre_minutes,
+            )
+        if intent.kind == "weekly" and intent.time_of_day is not None and intent.weekdays:
+            return self.repo.create_weekly(
+                title=intent.title,
+                weekdays=intent.weekdays,
+                at=intent.time_of_day,
+                pre_minutes=intent.pre_minutes,
+            )
+        raise ValueError("AI 解析结果不完整，无法创建提醒")
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._ensure_owner(update):
@@ -98,12 +156,53 @@ class BotHandlers:
             "/edit_rule ID daily|workday|Mon,Wed,Fri\n"
             "/edit_rule ID once YYYY-MM-DD HH:MM\n"
             "/edit_pre ID 分钟\n\n"
+            "自然语言：\n"
+            "- 直接发一句话即可（例如：每个工作日下午六点提醒我打扫卫生）\n"
+            "- AI 解析后会先给你确认按钮，确认后再创建\n\n"
             "说明：\n"
             "- 每天 10:00 自动发送今日总览\n"
             "- 到点提醒后，30 分钟未完成会催一次\n"
             "- 可在按钮里点“完成”或“稍后”"
         )
         await update.effective_message.reply_text(text)
+
+    async def natural_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._ensure_owner(update):
+            return
+        message = update.effective_message
+        if message is None or not message.text:
+            return
+        if self.ai_parser is None:
+            await message.reply_text("当前未配置 DeepSeek API，暂时无法自然语言建提醒。")
+            return
+
+        self._cleanup_pending_intents()
+        intent, reason = await self.ai_parser.parse(text=message.text.strip(), now_local=datetime.now(self.tz))
+        if intent is None:
+            await message.reply_text(
+                f"🤔 我没有完全理解这句话：{reason}\n"
+                "可以换个说法，或直接用 /add_daily /add_weekly /add_once。"
+            )
+            return
+
+        token = secrets.token_urlsafe(6)
+        self.pending_intents[token] = PendingIntent(intent=intent, created_at=datetime.now(self.tz))
+
+        keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("✅ 确认创建", callback_data=f"ai|ok|{token}"),
+                    InlineKeyboardButton("❌ 取消", callback_data=f"ai|cancel|{token}"),
+                ]
+            ]
+        )
+        preview = (
+            "🧠 AI 解析结果（请确认）\n\n"
+            f"标题：{intent.title}\n"
+            f"规则：{self._intent_rule_text(intent)}\n"
+            f"提前：{intent.pre_minutes} 分钟"
+        )
+        await message.reply_text(preview, reply_markup=keyboard)
 
     async def add_daily(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._ensure_owner(update):
@@ -333,6 +432,39 @@ class BotHandlers:
 
         payload = query.data.split("|")
         try:
+            if payload[0] == "ai" and len(payload) == 3:
+                action = payload[1]
+                token = payload[2]
+                pending = self.pending_intents.get(token)
+                if pending is None:
+                    await query.answer("这个确认已过期", show_alert=True)
+                    return
+                if action == "cancel":
+                    self.pending_intents.pop(token, None)
+                    await query.answer("已取消")
+                    try:
+                        await query.edit_message_reply_markup(reply_markup=None)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return
+                if action == "ok":
+                    self.pending_intents.pop(token, None)
+                    reminder = self._create_from_intent(pending.intent)
+                    await query.answer("已创建")
+                    try:
+                        await query.edit_message_reply_markup(reply_markup=None)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    if query.message:
+                        await query.message.reply_text(
+                            "✅ 已创建提醒\n"
+                            f"ID：#{reminder.id}\n"
+                            f"标题：{pending.intent.title}\n"
+                            f"规则：{self._intent_rule_text(pending.intent)}\n"
+                            f"提前：{pending.intent.pre_minutes} 分钟"
+                        )
+                    return
+
             if payload[0] == "c" and len(payload) == 3:
                 reminder_id = int(payload[1])
                 ts = int(payload[2])

@@ -8,6 +8,7 @@
 - 到点后 30 分钟未完成，会额外催办一次（只催一次）
 - 每天 10:00 自动发送“今日提醒总览”（按时间排序）
 - 固定 chat_id，仅允许绑定的主账号操作
+- 支持自然语言建提醒（接入 DeepSeek，先确认后创建）
 
 > 当前版本先做 Telegram 端。网页端后续可在同一数据库上直接扩展，实现同步管理。
 
@@ -30,6 +31,9 @@ DATABASE_URL=postgresql+psycopg://postgres:postgres@db:5432/reminder_bot
 TIMEZONE=Asia/Shanghai
 DAILY_SUMMARY_TIME=10:00
 POLL_INTERVAL_SECONDS=15
+DEEPSEEK_API_KEY=你的deepseek_api_key
+DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
+DEEPSEEK_MODEL=deepseek-chat
 ```
 
 ---
@@ -75,6 +79,18 @@ python main.py
 /add_once 2026-03-18 09:00 提交报告
 ```
 
+### 自然语言新增（DeepSeek）
+
+直接给机器人发一句话，例如：
+
+```text
+每个工作日下午6点提醒我打扫卫生
+明天早上9点提醒我提交日报，提前20分钟
+每天晚上11点提醒我关灯
+```
+
+机器人会返回 AI 解析结果，你点击“确认创建”后才会真正写入提醒。
+
 ### 管理提醒
 
 ```text
@@ -104,4 +120,4 @@ python main.py
 
 - 增加 Web 管理页（增删改查提醒），与 TG 共用 PostgreSQL 实现实时同步
 - 增加登录态（例如 magic link）
-- 增加节假日规则、自然语言建提醒、iCal 导入导出
+- 增加节假日规则、iCal 导入导出
