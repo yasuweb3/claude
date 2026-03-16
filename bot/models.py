@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, time, timezone
 from enum import Enum
+from typing import Optional
 
 from sqlalchemy import Boolean, DateTime, Enum as SAEnum, ForeignKey, Integer, String, Time, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -23,9 +24,9 @@ class Reminder(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     kind: Mapped[ReminderKind] = mapped_column(SAEnum(ReminderKind, name="reminder_kind"), nullable=False)
-    time_of_day: Mapped[time | None] = mapped_column(Time(timezone=False), nullable=True)
-    once_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    weekdays: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    time_of_day: Mapped[Optional[time]] = mapped_column(Time(timezone=False), nullable=True)
+    once_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    weekdays: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     pre_minutes: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -50,13 +51,13 @@ class OccurrenceState(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     reminder_id: Mapped[int] = mapped_column(ForeignKey("reminders.id", ondelete="CASCADE"), nullable=False)
     occurrence_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    pre_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    due_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    nag_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    snooze_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    snooze_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    last_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pre_sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    due_sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    nag_sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    snooze_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    snooze_sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_message_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     reminder: Mapped[Reminder] = relationship(back_populates="occurrences")
 
