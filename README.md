@@ -41,6 +41,21 @@ DEEPSEEK_MODEL=deepseek-chat
 
 ## 2. 启动方式
 
+### 方式 0：Mac mini 一键安装 + 开机自启（推荐）
+
+如果你在 Mac mini 上部署，直接执行一条命令：
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/yasuweb3/claude/cursor/cursor-bdaf/scripts/bootstrap_mac.sh)"
+```
+
+脚本会自动完成：
+- 拉取/更新代码到 `~/apps/tg-reminder`
+- 安装 Python 依赖
+- 引导填写 `TG_BOT_TOKEN / TG_CHAT_ID / DeepSeek Key`
+- 生成 launchd 配置并启动服务
+- 设置开机自启
+
 ### 方式 A：Docker Compose（推荐）
 
 ```bash
