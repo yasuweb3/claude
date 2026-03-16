@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class PendingIntent:
-    intent: ParsedReminderIntent
+    intents: list[ParsedReminderIntent]
     created_at: datetime
 
 
@@ -109,13 +109,17 @@ class BotHandlers:
             return f"{weekdays_label(intent.weekdays)} {format_hhmm(intent.time_of_day)}"
         return "规则缺失"
 
-    def _pending_preview_text(self, intent: ParsedReminderIntent) -> str:
-        return (
-            "🧠 AI 解析结果（请确认）\n\n"
-            f"标题：{intent.title}\n"
-            f"规则：{self._intent_rule_text(intent)}\n"
-            f"提前：{intent.pre_minutes} 分钟"
-        )
+    def _pending_preview_text(self, intents: list[ParsedReminderIntent]) -> str:
+        lines = [f"🧠 AI 解析结果（共 {len(intents)} 条，请确认）", ""]
+        for index, intent in enumerate(intents, start=1):
+            lines.append(
+                f"{index}. {intent.title}\n"
+                f"   规则：{self._intent_rule_text(intent)}\n"
+                f"   提前：{intent.pre_minutes} 分钟"
+            )
+        lines.append("")
+        lines.append("可先点击下方按钮统一设置“提前提醒”分钟。")
+        return "\n".join(lines)
 
     def _build_ai_confirm_keyboard(self, token: str) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(
@@ -165,6 +169,12 @@ class BotHandlers:
             )
         raise ValueError("AI 解析结果不完整，无法创建提醒")
 
+    def _create_from_intents(self, intents: list[ParsedReminderIntent]) -> list[Reminder]:
+        reminders: list[Reminder] = []
+        for intent in intents:
+            reminders.append(self._create_from_intent(intent))
+        return reminders
+
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._ensure_owner(update):
             return
@@ -192,6 +202,7 @@ class BotHandlers:
             "/edit_pre ID 分钟\n\n"
             "自然语言：\n"
             "- 直接发一句话即可（例如：每个工作日下午六点提醒我打扫卫生）\n"
+            "- 一句话可包含多个提醒（例如：10点喝水，13点喝水）\n"
             "- AI 解析后会先给你确认按钮，确认后再创建\n\n"
             "说明：\n"
             "- 每天 10:00 自动发送今日总览\n"
@@ -212,8 +223,8 @@ class BotHandlers:
             return
 
         self._cleanup_pending_intents()
-        intent, reason = await self.ai_parser.parse(text=message.text.strip(), now_local=datetime.now(self.tz))
-        if intent is None:
+        intents, reason = await self.ai_parser.parse(text=message.text.strip(), now_local=datetime.now(self.tz))
+        if intents is None:
             await message.reply_text(
                 f"🤔 我没有完全理解这句话：{reason}\n"
                 "可以换个说法，或直接用 /add_daily /add_weekly /add_once。"
@@ -221,10 +232,10 @@ class BotHandlers:
             return
 
         token = secrets.token_urlsafe(6)
-        self.pending_intents[token] = PendingIntent(intent=intent, created_at=datetime.now(self.tz))
+        self.pending_intents[token] = PendingIntent(intents=intents, created_at=datetime.now(self.tz))
 
         await message.reply_text(
-            self._pending_preview_text(intent),
+            self._pending_preview_text(intents),
             reply_markup=self._build_ai_confirm_keyboard(token),
         )
 
@@ -471,12 +482,12 @@ class BotHandlers:
                     return
                 if action == "pre" and len(payload) == 4:
                     minutes = max(0, int(payload[3]))
-                    updated = replace(pending.intent, pre_minutes=minutes)
-                    self.pending_intents[token] = PendingIntent(intent=updated, created_at=pending.created_at)
+                    updated_intents = [replace(item, pre_minutes=minutes) for item in pending.intents]
+                    self.pending_intents[token] = PendingIntent(intents=updated_intents, created_at=pending.created_at)
                     await query.answer(f"已设置提前 {minutes} 分钟")
                     try:
                         await query.edit_message_text(
-                            self._pending_preview_text(updated),
+                            self._pending_preview_text(updated_intents),
                             reply_markup=self._build_ai_confirm_keyboard(token),
                         )
                     except Exception:  # noqa: BLE001
@@ -492,21 +503,26 @@ class BotHandlers:
                     return
                 if action == "ok":
                     self.pending_intents.pop(token, None)
-                    reminder = self._create_from_intent(pending.intent)
+                    reminders = self._create_from_intents(pending.intents)
                     await query.answer("已创建")
                     try:
                         await query.edit_message_reply_markup(reply_markup=None)
                     except Exception:  # noqa: BLE001
                         pass
                     if query.message:
+                        lines = [f"✅ 已创建 {len(reminders)} 条提醒"]
+                        for idx, (reminder, intent) in enumerate(zip(reminders, pending.intents, strict=False), start=1):
+                            lines.append(
+                                f"{idx}. #{reminder.id} {intent.title} | {self._intent_rule_text(intent)} | 提前{intent.pre_minutes}分钟"
+                            )
                         await query.message.reply_text(
-                            "✅ 已创建提醒\n"
-                            f"ID：#{reminder.id}\n"
-                            f"标题：{pending.intent.title}\n"
-                            f"规则：{self._intent_rule_text(pending.intent)}\n"
-                            f"提前：{pending.intent.pre_minutes} 分钟",
-                            reply_markup=self._build_pre_quick_keyboard(reminder.id),
+                            "\n".join(lines)
                         )
+                        for reminder in reminders:
+                            await query.message.reply_text(
+                                f"⚙️ 快速调整 #{reminder.id} 的提前提醒",
+                                reply_markup=self._build_pre_quick_keyboard(reminder.id),
+                            )
                     return
 
             if payload[0] == "rp" and len(payload) == 3:

@@ -32,7 +32,7 @@ class DeepSeekReminderParser:
         self.model = model
         self.tz = tz
 
-    async def parse(self, *, text: str, now_local: datetime) -> tuple[ParsedReminderIntent | None, str]:
+    async def parse(self, *, text: str, now_local: datetime) -> tuple[list[ParsedReminderIntent] | None, str]:
         prompt = self._build_prompt(text=text, now_local=now_local)
         try:
             raw = await self._chat(prompt)
@@ -86,25 +86,50 @@ class DeepSeekReminderParser:
             "{\n"
             '  "ok": true 或 false,\n'
             '  "reason": "失败原因，仅 ok=false 时必填",\n'
-            '  "title": "提醒标题",\n'
-            '  "kind": "once | daily | weekly",\n'
-            '  "time": "HH:MM",\n'
-            '  "date": "YYYY-MM-DD (仅 once)",\n'
-            '  "weekdays": [0-6, 其中 0=周一, 6=周日, 仅 weekly],\n'
-            '  "pre_minutes": 10\n'
+            '  "reminders": [\n'
+            "    {\n"
+            '      "title": "提醒标题",\n'
+            '      "kind": "once | daily | weekly",\n'
+            '      "time": "HH:MM",\n'
+            '      "date": "YYYY-MM-DD (仅 once)",\n'
+            '      "weekdays": [0-6, 其中 0=周一, 6=周日, 仅 weekly],\n'
+            '      "pre_minutes": 10\n'
+            "    }\n"
+            "  ]\n"
             "}\n\n"
             "规则：\n"
             "1) 缺信息时 ok=false 并写 reason。\n"
-            "2) 标题要简洁可读。\n"
-            "3) 每天=kind=daily；工作日=kind=weekly 且 weekdays=[0,1,2,3,4]。\n"
-            "4) 时间必须 24 小时制 HH:MM。\n"
+            "2) 如果一句话里有多个提醒，必须拆成多个 reminders 元素。\n"
+            "3) 标题要简洁可读。\n"
+            "4) 每天=kind=daily；工作日=kind=weekly 且 weekdays=[0,1,2,3,4]。\n"
+            "5) 时间必须 24 小时制 HH:MM。\n"
         )
 
-    def _validate_payload(self, payload: dict[str, Any]) -> tuple[ParsedReminderIntent | None, str]:
+    def _validate_payload(self, payload: dict[str, Any]) -> tuple[list[ParsedReminderIntent] | None, str]:
         ok = bool(payload.get("ok", True))
         if not ok:
             return None, str(payload.get("reason", "信息不足，无法创建提醒"))
 
+        if isinstance(payload.get("reminders"), list):
+            raw_items = payload.get("reminders", [])
+        else:
+            # 兼容旧格式：顶层直接是一个提醒对象
+            raw_items = [payload]
+
+        intents: list[ParsedReminderIntent] = []
+        for index, raw in enumerate(raw_items, start=1):
+            if not isinstance(raw, dict):
+                return None, f"第 {index} 条提醒格式无效"
+            intent, error = self._validate_single_item(raw)
+            if intent is None:
+                return None, f"第 {index} 条提醒有误：{error}"
+            intents.append(intent)
+
+        if not intents:
+            return None, "没有识别到任何提醒"
+        return intents, ""
+
+    def _validate_single_item(self, payload: dict[str, Any]) -> tuple[ParsedReminderIntent | None, str]:
         title = str(payload.get("title", "")).strip()
         if not title:
             return None, "没有识别到提醒标题"
