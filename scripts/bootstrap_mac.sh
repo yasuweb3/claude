@@ -9,6 +9,7 @@ fi
 REPO_URL="${REPO_URL:-https://github.com/yasuweb3/claude.git}"
 BRANCH="${BRANCH:-cursor/cursor-bdaf}"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/apps/tg-reminder}"
+# 可选：ENABLE_PROXY=1 PROXY_URL=... ALL_PROXY_URL=... NO_PROXY_LIST=...
 
 command -v git >/dev/null 2>&1 || {
   echo "❌ 缺少 git，请先安装 Xcode Command Line Tools。"

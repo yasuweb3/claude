@@ -105,6 +105,10 @@ current_timezone="$(get_env_value TIMEZONE)"
 current_summary_time="$(get_env_value DAILY_SUMMARY_TIME)"
 current_poll_interval="$(get_env_value POLL_INTERVAL_SECONDS)"
 
+default_proxy_url="${PROXY_URL:-${HTTP_PROXY:-http://127.0.0.1:7890}}"
+default_all_proxy="${ALL_PROXY_URL:-${ALL_PROXY:-$default_proxy_url}}"
+default_no_proxy="${NO_PROXY_LIST:-${NO_PROXY:-127.0.0.1,localhost,::1}}"
+
 echo ""
 echo "=== TG 提醒机器人一键安装（Mac）==="
 echo "项目目录：$PROJECT_DIR"
@@ -170,6 +174,55 @@ DAILY_SUMMARY_TIME="${input_summary_time:-$current_summary_time}"
 read -r -p "POLL_INTERVAL_SECONDS（默认 ${current_poll_interval}）: " input_poll_interval
 POLL_INTERVAL_SECONDS="${input_poll_interval:-$current_poll_interval}"
 
+if [[ -n "${ENABLE_PROXY:-}" ]]; then
+  enable_proxy="$ENABLE_PROXY"
+else
+  read -r -p "启用代理（Clash）访问 Telegram/DeepSeek？[Y/n] (默认 Y): " enable_proxy
+  enable_proxy="${enable_proxy:-Y}"
+fi
+
+proxy_enabled="false"
+if [[ "$enable_proxy" =~ ^([Yy]|1|true|TRUE)$ ]]; then
+  proxy_enabled="true"
+fi
+
+HTTP_PROXY_VALUE=""
+HTTPS_PROXY_VALUE=""
+ALL_PROXY_VALUE=""
+NO_PROXY_VALUE=""
+if [[ "$proxy_enabled" == "true" ]]; then
+  if [[ -n "${PROXY_URL:-}" ]]; then
+    HTTP_PROXY_VALUE="$PROXY_URL"
+  else
+    read -r -p "HTTP/HTTPS 代理地址（默认 ${default_proxy_url}）: " input_proxy_url
+    HTTP_PROXY_VALUE="${input_proxy_url:-$default_proxy_url}"
+  fi
+
+  HTTPS_PROXY_VALUE="$HTTP_PROXY_VALUE"
+  if [[ -n "${ALL_PROXY_URL:-}" ]]; then
+    ALL_PROXY_VALUE="$ALL_PROXY_URL"
+  else
+    read -r -p "ALL_PROXY（默认 ${default_all_proxy}）: " input_all_proxy
+    ALL_PROXY_VALUE="${input_all_proxy:-$default_all_proxy}"
+  fi
+
+  if [[ -n "${NO_PROXY_LIST:-}" ]]; then
+    NO_PROXY_VALUE="$NO_PROXY_LIST"
+  else
+    read -r -p "NO_PROXY（默认 ${default_no_proxy}）: " input_no_proxy
+    NO_PROXY_VALUE="${input_no_proxy:-$default_no_proxy}"
+  fi
+
+  export HTTP_PROXY="$HTTP_PROXY_VALUE"
+  export HTTPS_PROXY="$HTTPS_PROXY_VALUE"
+  export ALL_PROXY="$ALL_PROXY_VALUE"
+  export NO_PROXY="$NO_PROXY_VALUE"
+  export http_proxy="$HTTP_PROXY_VALUE"
+  export https_proxy="$HTTPS_PROXY_VALUE"
+  export all_proxy="$ALL_PROXY_VALUE"
+  export no_proxy="$NO_PROXY_VALUE"
+fi
+
 DATABASE_URL="sqlite+pysqlite:////Users/$(id -un)/apps/tg-reminder/reminder.db"
 if [[ "$PROJECT_DIR" != "/Users/$(id -un)/apps/tg-reminder" ]]; then
   DATABASE_URL="sqlite+pysqlite:////${PROJECT_DIR#/}/reminder.db"
@@ -193,6 +246,32 @@ upsert_env \
   "DEEPSEEK_MODEL=deepseek-chat" \
   "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY"
 
+proxy_env_plist=""
+if [[ "$proxy_enabled" == "true" ]]; then
+  proxy_env_plist="$(cat <<PROXY
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>HTTP_PROXY</key>
+      <string>${HTTP_PROXY_VALUE}</string>
+      <key>HTTPS_PROXY</key>
+      <string>${HTTPS_PROXY_VALUE}</string>
+      <key>ALL_PROXY</key>
+      <string>${ALL_PROXY_VALUE}</string>
+      <key>NO_PROXY</key>
+      <string>${NO_PROXY_VALUE}</string>
+      <key>http_proxy</key>
+      <string>${HTTP_PROXY_VALUE}</string>
+      <key>https_proxy</key>
+      <string>${HTTPS_PROXY_VALUE}</string>
+      <key>all_proxy</key>
+      <string>${ALL_PROXY_VALUE}</string>
+      <key>no_proxy</key>
+      <string>${NO_PROXY_VALUE}</string>
+    </dict>
+PROXY
+)"
+fi
+
 cat >"$PLIST_PATH" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -209,6 +288,7 @@ cat >"$PLIST_PATH" <<PLIST
       <string>${PYTHON_BIN}</string>
       <string>${PROJECT_DIR}/main.py</string>
     </array>
+${proxy_env_plist}
 
     <key>RunAtLoad</key>
     <true/>
@@ -236,3 +316,10 @@ echo "  查看状态: launchctl list | grep ${SERVICE_LABEL}"
 echo "  实时日志: tail -f ${LOG_DIR}/out.log"
 echo "  错误日志: tail -f ${LOG_DIR}/err.log"
 echo "  重启服务: launchctl kickstart -k gui/$(id -u)/${SERVICE_LABEL}"
+if [[ "$proxy_enabled" == "true" ]]; then
+  echo ""
+  echo "代理配置："
+  echo "  HTTP_PROXY=${HTTP_PROXY_VALUE}"
+  echo "  ALL_PROXY=${ALL_PROXY_VALUE}"
+  echo "  NO_PROXY=${NO_PROXY_VALUE}"
+fi

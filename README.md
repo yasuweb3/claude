@@ -56,6 +56,16 @@ DEEPSEEK_MODEL=deepseek-chat
 - 生成 launchd 配置并启动服务
 - 设置开机自启
 
+#### Clash 用户（推荐）
+
+如果你本机走 Clash，建议直接带上代理环境变量运行：
+
+```bash
+ENABLE_PROXY=1 PROXY_URL=http://127.0.0.1:7890 ALL_PROXY_URL=http://127.0.0.1:7890 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/yasuweb3/claude/cursor/cursor-bdaf/scripts/bootstrap_mac.sh)"
+```
+
+脚本也支持交互式设置代理（默认会提示启用 Clash 代理）。
+
 ### 方式 A：Docker Compose（推荐）
 
 ```bash
