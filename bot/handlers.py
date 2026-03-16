@@ -31,6 +31,15 @@ class PendingIntent:
     created_at: datetime
 
 
+@dataclass
+class ListItem:
+    reminder: Reminder
+    rule_text: str
+    next_at: datetime | None
+    today_at: datetime | None
+    today_state: str | None  # remaining | passed | completed | None
+
+
 def _extract_pre_option(args: list[str], default_pre: int = 10) -> tuple[int, list[str]]:
     tokens = list(args)
     pre = default_pre
@@ -65,6 +74,8 @@ def describe_rule(reminder: Reminder, tz: ZoneInfo) -> str:
 
 
 class BotHandlers:
+    LIST_PAGE_SIZE = 8
+
     def __init__(
         self,
         repo: ReminderRepository,
@@ -146,6 +157,169 @@ class BotHandlers:
                 ]
             ]
         )
+
+    def _today_occurrence_at(self, reminder: Reminder, now: datetime) -> datetime | None:
+        if reminder.kind == ReminderKind.ONCE:
+            if reminder.once_at is None:
+                return None
+            local = reminder.once_at.astimezone(self.tz)
+            if local.date() == now.date():
+                return local
+            return None
+
+        if reminder.time_of_day is None:
+            return None
+
+        if reminder.kind == ReminderKind.DAILY:
+            return datetime.combine(now.date(), reminder.time_of_day, tzinfo=self.tz)
+
+        if reminder.kind == ReminderKind.WEEKLY:
+            days = weekdays_from_storage(reminder.weekdays)
+            if now.weekday() in days:
+                return datetime.combine(now.date(), reminder.time_of_day, tzinfo=self.tz)
+        return None
+
+    def _build_list_items(self, now: datetime) -> list[ListItem]:
+        reminders = self.repo.list_reminders()
+        items: list[ListItem] = []
+        for reminder in reminders:
+            rule_text = describe_rule(reminder, self.tz)
+            next_at = self.repo.next_occurrence(reminder, now)
+            today_at = self._today_occurrence_at(reminder, now)
+            today_state: str | None = None
+            if today_at is not None:
+                state = self.repo.get_occurrence_state(reminder.id, today_at)
+                if state is not None and state.completed_at is not None:
+                    today_state = "completed"
+                elif today_at >= now:
+                    today_state = "remaining"
+                else:
+                    today_state = "passed"
+
+            items.append(
+                ListItem(
+                    reminder=reminder,
+                    rule_text=rule_text,
+                    next_at=next_at,
+                    today_at=today_at,
+                    today_state=today_state,
+                )
+            )
+        return items
+
+    def _render_list_view(self, view: str, page: int) -> tuple[str, InlineKeyboardMarkup]:
+        now = datetime.now(self.tz)
+        items = self._build_list_items(now)
+
+        summary_total = len(items)
+        summary_paused = len([item for item in items if not item.reminder.active])
+        summary_today_remaining = len([item for item in items if item.today_state == "remaining"])
+        summary_today_passed = len([item for item in items if item.today_state == "passed"])
+        summary_today_completed = len([item for item in items if item.today_state == "completed"])
+
+        if view == "today":
+            filtered = [item for item in items if item.today_at is not None]
+            filtered.sort(key=lambda item: (item.today_at or now, item.reminder.id))
+            view_label = "今天"
+        elif view == "pending":
+            filtered = [item for item in items if item.reminder.active and item.next_at is not None]
+            filtered.sort(key=lambda item: (item.next_at or now, item.reminder.id))
+            view_label = "仅待触发"
+        elif view == "paused":
+            filtered = [item for item in items if not item.reminder.active]
+            filtered.sort(key=lambda item: item.reminder.id)
+            view_label = "暂停"
+        else:
+            view = "all"
+            filtered = list(items)
+            filtered.sort(
+                key=lambda item: (
+                    0 if item.next_at is not None else 1,
+                    item.next_at or now,
+                    item.reminder.id,
+                )
+            )
+            view_label = "全部"
+
+        if not filtered:
+            text = (
+                f"📋 提醒列表 · {view_label}\n"
+                f"{now.strftime('%Y-%m-%d %H:%M')} ({self.tz.key})\n\n"
+                "当前视图没有提醒。"
+            )
+            keyboard = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton("今天", callback_data="ls|today|0"),
+                        InlineKeyboardButton("仅待触发", callback_data="ls|pending|0"),
+                        InlineKeyboardButton("暂停", callback_data="ls|paused|0"),
+                        InlineKeyboardButton("全部", callback_data="ls|all|0"),
+                    ]
+                ]
+            )
+            return text, keyboard
+
+        total_pages = (len(filtered) + self.LIST_PAGE_SIZE - 1) // self.LIST_PAGE_SIZE
+        page = max(0, min(page, total_pages - 1))
+        start = page * self.LIST_PAGE_SIZE
+        end = start + self.LIST_PAGE_SIZE
+        page_items = filtered[start:end]
+
+        lines = [
+            f"📋 提醒列表 · {view_label} ({page + 1}/{total_pages})",
+            f"{now.strftime('%Y-%m-%d %H:%M')} ({self.tz.key})",
+            (
+                f"总计 {summary_total} | 今日待触发 {summary_today_remaining} | "
+                f"今日已过 {summary_today_passed} | 今日已完成 {summary_today_completed} | 暂停 {summary_paused}"
+            ),
+            "",
+        ]
+
+        for item in page_items:
+            reminder = item.reminder
+            if not reminder.active:
+                icon = "⏸"
+            elif item.today_state == "remaining":
+                icon = "🟢"
+            elif item.today_state == "completed":
+                icon = "✅"
+            elif item.today_state == "passed":
+                icon = "⚪"
+            else:
+                icon = "🔵"
+
+            if view == "today" and item.today_at is not None:
+                time_text = item.today_at.strftime("%H:%M")
+                status_text = {
+                    "remaining": "今天待触发",
+                    "passed": "今天已过",
+                    "completed": "今天已完成",
+                    None: "今天",
+                }.get(item.today_state, "今天")
+            else:
+                time_text = item.next_at.strftime("%m-%d %H:%M") if item.next_at else "无下次"
+                status_text = "已暂停" if not reminder.active else "下次触发"
+
+            lines.append(f"{icon} #{reminder.id} {time_text}  {reminder.title}")
+            lines.append(
+                f"   {status_text} | {item.rule_text} | 提前 {reminder.pre_minutes} 分钟"
+            )
+
+        keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("今天", callback_data="ls|today|0"),
+                    InlineKeyboardButton("仅待触发", callback_data="ls|pending|0"),
+                    InlineKeyboardButton("暂停", callback_data="ls|paused|0"),
+                    InlineKeyboardButton("全部", callback_data="ls|all|0"),
+                ],
+                [
+                    InlineKeyboardButton("⬅️ 上一页", callback_data=f"ls|{view}|{page - 1}"),
+                    InlineKeyboardButton("➡️ 下一页", callback_data=f"ls|{view}|{page + 1}"),
+                ],
+            ]
+        )
+        return "\n".join(lines), keyboard
 
     def _create_from_intent(self, intent: ParsedReminderIntent) -> Reminder:
         if intent.kind == "once" and intent.once_at is not None:
@@ -303,24 +477,8 @@ class BotHandlers:
     async def list_reminders(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._ensure_owner(update):
             return
-        reminders = self.repo.list_reminders()
-        if not reminders:
-            await update.effective_message.reply_text("当前没有提醒，先用 /add_daily 或 /add_weekly 创建。")
-            return
-
-        now = datetime.now(self.tz)
-        lines = ["📋 当前提醒列表", ""]
-        for reminder in reminders:
-            status = "启用" if reminder.active else "暂停"
-            next_at = self.repo.next_occurrence(reminder, now)
-            next_text = next_at.strftime("%Y-%m-%d %H:%M") if next_at else "无"
-            lines.append(
-                f"#{reminder.id} [{status}] {reminder.title}\n"
-                f"  规则：{describe_rule(reminder, self.tz)}\n"
-                f"  提前：{reminder.pre_minutes} 分钟\n"
-                f"  下次：{next_text}"
-            )
-        await update.effective_message.reply_text("\n".join(lines))
+        text, keyboard = self._render_list_view("today", 0)
+        await update.effective_message.reply_text(text, reply_markup=keyboard)
 
     async def delete_reminder(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._ensure_owner(update):
@@ -535,6 +693,18 @@ class BotHandlers:
                 await query.answer(f"已改为提前 {minutes} 分钟")
                 if query.message:
                     await query.message.reply_text(f"✅ 提醒 #{reminder_id} 已改为提前 {minutes} 分钟")
+                return
+
+            if payload[0] == "ls" and len(payload) == 3:
+                view = payload[1]
+                page = int(payload[2])
+                text, keyboard = self._render_list_view(view, page)
+                await query.answer()
+                try:
+                    await query.edit_message_text(text, reply_markup=keyboard)
+                except Exception:  # noqa: BLE001
+                    if query.message:
+                        await query.message.reply_text(text, reply_markup=keyboard)
                 return
 
             if payload[0] == "c" and len(payload) == 3:
