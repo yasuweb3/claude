@@ -1,0 +1,5 @@
+python-telegram-bot[socks]>=22.0
+SQLAlchemy>=2.0
+psycopg[binary]>=3.2
+python-dotenv>=1.1
+httpx>=0.28
