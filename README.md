@@ -66,6 +66,8 @@ ENABLE_PROXY=1 PROXY_URL=http://127.0.0.1:7890 ALL_PROXY_URL=http://127.0.0.1:78
 
 脚本也支持交互式设置代理（默认会提示启用 Clash 代理）。
 
+> 如果你之前已安装过旧版本依赖，请执行一次 `pip install -r requirements.txt`，以安装 SOCKS 代理支持。
+
 ### 方式 A：Docker Compose（推荐）
 
 ```bash
