@@ -303,9 +303,19 @@ ${proxy_env_plist}
 </plist>
 PLIST
 
-launchctl unload "$PLIST_PATH" >/dev/null 2>&1 || true
-launchctl load "$PLIST_PATH"
-launchctl kickstart -k "gui/$(id -u)/${SERVICE_LABEL}"
+uid="$(id -u)"
+for domain in "gui/${uid}" "user/${uid}"; do
+  launchctl bootout "$domain" "$PLIST_PATH" >/dev/null 2>&1 || true
+done
+
+if launchctl print "gui/${uid}" >/dev/null 2>&1; then
+  launch_domain="gui/${uid}"
+else
+  launch_domain="user/${uid}"
+fi
+
+launchctl bootstrap "$launch_domain" "$PLIST_PATH"
+launchctl kickstart -k "${launch_domain}/${SERVICE_LABEL}"
 
 echo ""
 echo "✅ 安装完成，机器人已启动（并已设置开机自启）"
@@ -315,7 +325,7 @@ echo "常用命令："
 echo "  查看状态: launchctl list | grep ${SERVICE_LABEL}"
 echo "  实时日志: tail -f ${LOG_DIR}/out.log"
 echo "  错误日志: tail -f ${LOG_DIR}/err.log"
-echo "  重启服务: launchctl kickstart -k gui/$(id -u)/${SERVICE_LABEL}"
+echo "  重启服务: launchctl kickstart -k ${launch_domain}/${SERVICE_LABEL}"
 if [[ "$proxy_enabled" == "true" ]]; then
   echo ""
   echo "代理配置："
