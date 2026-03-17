@@ -75,9 +75,20 @@ def build_application() -> Application:
         if scheduler:
             await scheduler.stop()
 
+    # 在代理网络（如 Clash）下适当放大连接池与超时，避免 PoolTimeout 导致进程退出。
     app = (
         ApplicationBuilder()
         .token(config.bot_token)
+        .connection_pool_size(32)
+        .pool_timeout(30.0)
+        .connect_timeout(20.0)
+        .read_timeout(30.0)
+        .write_timeout(30.0)
+        .get_updates_connection_pool_size(8)
+        .get_updates_pool_timeout(30.0)
+        .get_updates_connect_timeout(20.0)
+        .get_updates_read_timeout(40.0)
+        .get_updates_write_timeout(30.0)
         .post_init(post_init)
         .post_shutdown(post_shutdown)
         .build()
